@@ -4,9 +4,10 @@ from scipy.optimize import fsolve, least_squares
 from qpsolvers import solve_qp
 from qpsolvers.problem import Problem
 from qpsolvers.solve_problem import solve_problem
+# from casadi import *
 
 def lognpdf(x, mu, sigma, t0):
-    x = np.where(x <= 0, np.inf, x )
+    # x = np.where(x <= 0, np.inf, x )
     y = np.exp(-0.5*((np.log(x-t0) - mu)/sigma)**2) / ((x-t0) * np.sqrt(2*np.pi) * sigma)
     return y
 
@@ -196,7 +197,7 @@ class set_problem:
 
         return [A, b, H, t, D, DD, DDD]
 
-    def solve(self, icost, n, d, alpha_beta):
+    def solve(self, icost, n, d, alpha_beta, second_joint=0):
         nDecVar = np.sum(self.nGrid)
         nSegment = len(self.nGrid)
 
@@ -258,12 +259,153 @@ class set_problem:
                 grid_q_derivatives = self.chebyDerivative(grid_q, tSpan, D, DD, DDD)
                 grid_dq = grid_q_derivatives[0]
                 t_interp = np.linspace(t[0], t[-1], 101)
-                q = self.chebyInterpolate(grid_q, t_interp, tSpan)
-                dq = self.chebyInterpolate(grid_dq, t_interp, tSpan)
-                ddq = self.chebyInterpolate(grid_q_derivatives[1], t_interp, tSpan)
-                dddq = self.chebyInterpolate(grid_q_derivatives[2], t_interp, tSpan)
+                if second_joint ==1:
+                    t_interp = np.linspace(0, t[-1], 101)
+                    t_inter_crop = t_interp[np.where(t_interp==np.round(t[0], 3))[0][0]:]
+                    q = np.hstack(
+                        (np.ones((1,t_interp.shape[0]-t_inter_crop.shape[0]))*self.qNode[0],
+                         self.chebyInterpolate(grid_q, t_inter_crop, tSpan)
+                         ))
+                    dq = np.hstack(
+                        (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
+                         self.chebyInterpolate(grid_dq, t_inter_crop, tSpan)
+                         ))
+                    ddq = np.hstack(
+                        (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
+                         self.chebyInterpolate(grid_q_derivatives[1], t_inter_crop, tSpan)
+                         ))
+                    dddq = np.hstack(
+                        (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
+                         self.chebyInterpolate(grid_q_derivatives[2], t_inter_crop, tSpan)
+                         ))
+                else:
+                    t_interp = np.linspace(t[0], t[-1], 101)
+                    q = self.chebyInterpolate(grid_q, t_interp, tSpan)
+                    dq = self.chebyInterpolate(grid_dq, t_interp, tSpan)
+                    ddq = self.chebyInterpolate(grid_q_derivatives[1], t_interp, tSpan)
+                    dddq = self.chebyInterpolate(grid_q_derivatives[2], t_interp, tSpan)
 
         else:
             print('No convergence')
 
         return [t, grid_q, grid_dq, t_interp, q, dq, ddq, dddq, cost]
+
+class set_problem_ocp:
+    def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):
+        self.qLow = qLow
+        self.qUpp = qUpp
+        self.dqMax = dqMax
+        self.tNode = tNode
+        self.qNode = qNode
+        nGrid = 100
+        self.nGrid = nGrid
+        N = self.nGrid
+        self.tf = MX.sym('tf')
+        self.x = MX.sym("x", 2)  # x[0] = theta1,
+        self.u = MX.sym("u")
+        self.dN = self.tf/N
+
+    def solve(self, alpha_beta):
+        N = self.nGrid
+        tf = MX.sym('tf')
+        # tf=1.0
+        self.dN = tf / N
+        x = MX.sym("x", 2)  # x[0] = p, x[1] = v
+        u = MX.sym("u")  # u[0] = a
+
+        def dyn_fun(x, u):
+            q = x[0]
+            qdot = x[1]
+            qddot = u
+            return vertcat(qdot, qddot)
+
+        def int_fun(xk, uk):
+            M = 10
+            state = xk
+            control = uk
+            for i in range(M):
+                dstate = dyn_fun(state, control)
+                state += dstate * self.dN / M
+            return state
+
+        # Formulate discrete time dynamics
+
+        ### REGULAR PROBLEM
+        # Start with an empty NLP
+        w = []
+        w0 = []
+        lbw = []
+        ubw = []
+        J = 0
+        g = []
+        lbg = []
+        ubg = []
+
+        # Initialize
+        w += [tf]
+        lbw += [0]
+        ubw += [1]
+        w0 += [0.8]
+
+        Xk = MX.sym('X0', 2)
+        w += [Xk]
+        lbw += [self.qNode[0], 0.0]
+        ubw += [self.qNode[0], 0.0]
+        w0 += [self.qNode[0], 0.0]
+        # Formulate the NLP
+        for k in range(N):
+            # New NLP variable for the control
+            Uk = MX.sym('U_' + str(k))
+            J += (Uk**2 + 1000 * Xk[1]**2) * (k*self.dN)**4
+            w += [Uk]
+            lbw += [-1000]
+            ubw += [1000]
+            w0 += [0]
+
+            # Integrate till the end of the interval
+            Fk = int_fun(Xk, Uk)
+            Xk_end = Fk
+
+            # New NLP variable for state at end of interval
+            Xk = MX.sym('X_' + str(k + 1), 2)
+            if k + 1 == N:
+                w += [Xk]
+                lbw += [self.qNode[1], 0.0]
+                ubw += [self.qNode[1], 0.0]
+                w0 += [0] * 2
+            else:
+                w += [Xk]
+                lbw += [self.qLow, -self.dqMax]
+                ubw += [self.qUpp, self.dqMax]
+                w0 += [0] * 2
+            # Add equality constraint
+            g += [Xk_end - Xk]
+            ubg += [0] * 2
+            lbg += [0] * 2
+
+
+
+        # Create NLP solver
+        opts = {'ipopt.linear_solver': 'mumps', 'ipopt.tol': 1e-6, 'ipopt.constr_viol_tol': 1e-6,
+                'ipopt.hessian_approximation': 'limited-memory'}
+        prob = {'f': J, 'x': vertcat(*w), 'g': vertcat(*g)}
+        solver = nlpsol('solver', 'ipopt', prob, opts)
+
+        sol = solver(x0=w0, lbx=lbw, ubx=ubw, lbg=lbg, ubg=ubg)
+        w_opt = sol['x'].full().flatten()
+
+        tf_opt = w_opt[0]
+        p_opt = w_opt[1::3]
+        v_opt = w_opt[2::3]
+        u_opt = w_opt[3::3]
+
+        import matplotlib.pyplot as plt
+        T = np.linspace(0, tf_opt, p_opt.shape[0])
+        fig, axes = plt.subplots(nrows=2, ncols=1, sharey=False)
+        axes[0].plot(T,np.rad2deg(p_opt))
+        axes[1].plot(T,v_opt)
+        plt.figure()
+        plt.plot(T[:-1], u_opt)
+        plt.plot(u_opt)
+
+
