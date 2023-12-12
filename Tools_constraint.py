@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import fsolve, least_squares
@@ -46,7 +45,7 @@ def home_fit_lognpdf(t , f, ti, tj, u_bounds, s_bounds):
 def inflexion_points_logparam(t, f, df, s_bounds):
     # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4668345
     abf = np.abs(f)
-    df = df # was -df
+    df = - df
     t_m = t[abf.argmax()]
     i1 = df.argmax()
     tinf1 = t[i1]
@@ -75,89 +74,6 @@ def inflexion_points_logparam(t, f, df, s_bounds):
 
     return mu, sigma, D, t0
 
-def detect_onset(x, threshold, n_above = 1, n_below= 0,  threshold2= None, n_above2= 1):
-
-    if x.ndim != 1:
-        raise ValueError(
-            f"detect_onset works only for one-dimensional vector. You have {x.ndim} dimensions."
-        )
-    x = np.atleast_1d(x.copy())
-    x[np.isnan(x)] = -np.inf
-    inds = np.nonzero(x >= threshold)[0]
-    if inds.size:
-        # initial and final indexes of almost continuous data
-        inds = np.vstack(
-            (
-                inds[np.diff(np.hstack((-np.inf, inds))) > n_below + 1],
-                inds[np.diff(np.hstack((inds, np.inf))) > n_below + 1],
-            )
-        ).T
-        # indexes of almost continuous data longer than or equal to n_above
-        inds = inds[inds[:, 1] - inds[:, 0] >= n_above - 1, :]
-        # minimum amplitude of n_above2 values in x to detect
-        if threshold2 is not None and inds.size:
-            idel = np.ones(inds.shape[0], dtype=bool)
-            for i in range(inds.shape[0]):
-                if (
-                    np.count_nonzero(x[inds[i, 0] : inds[i, 1] + 1] >= threshold2)
-                    < n_above2
-                ):
-                    idel[i] = False
-            inds = inds[idel, :]
-    if not inds.size:
-        inds = np.array([])
-    return inds
-def inflexion_points_logparam_robust(t, f, df, s_bounds, plot_check=False):
-    # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4668345
-    # Basically, we need to identify the following events:
-    # t_m: occurence of maximum velocity
-    # tinf1: occurence of maximum acceleration
-    # tinf2: occurence of minimum acceleration
-    # tmin: min bound of the interval
-    # tmax max bound of the interval
-    ab_v = np.abs(f)
-    df = df # was -df
-    onsets = detect_onset(ab_v, ab_v.max()*1/100)[0]
-    tmin = t[onsets[0]]
-    tmax = t[onsets[1]]
-    iv_max = ab_v.argmax()
-    t_m = t[iv_max]
-    i1 = df.argmax()
-    tinf1 = t[i1]
-    i2 = df.argmin()
-    tinf2 = t[i2]
-    v_0 = ab_v.max()*1/100 # 1% max velocity to identify start and end of lognormal
-    # vmin = (ab_v-v_0).argmin()
-    # sort_indices = np.argsort(ab_v - ab_v.max() * 1 / 100)
-    # imin_max = np.argsort(np.abs(np.diff(sort_indices)))[::-1][:2]
-    # if iv_max<imin_max[1] and iv_max>imin_max[0]:
-    #     tmax = imin_max[1]
-    #     tmin = imin_max[0]
-    # else:
-    #     ordered_indices = np.argsort(np.abs(np.diff(sort_indices)))[::-1]
-    #     tmin = t[ordered_indices[ordered_indices<iv_max][0]]
-    #     tmax = t[ordered_indices[ordered_indices>iv_max][0]]
-
-    if plot_check:
-        plt.plot(t, f, label='Velocity')
-        plt.plot(t, ab_v-v_0)
-        # plt.plot(t, df, label='Acceleration')
-        for it in [t_m, tmin, tmax, tinf1, tinf2]:
-            plt.axvline(x = it)
-
-    f = lambda x: func_sigma(x, t_m, tmin, tmax)
-    res = least_squares(f, s_bounds[-1], bounds=(s_bounds[0], s_bounds[1]))
-    sigma = res.x
-
-    alpha1 = np.exp(-sigma * (sigma + np.sqrt(sigma ** 2 + 4)) / 2)
-    alpha2 = np.exp(-sigma * (sigma - np.sqrt(sigma ** 2 + 4)) / 2)
-    mu = sigma**2 + np.log((np.abs(tinf2-tinf1))/(alpha2-alpha1))
-    #TODO: confirm abs value
-
-    t0 = t_m-np.exp(mu-sigma**2)
-    D = ab_v.max()*sigma*np.sqrt(2*np.pi)*np.exp(mu-0.5*sigma**2)
-
-    return mu, sigma, D, t0
 class set_problem:
     def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):
         self.qLow = qLow
@@ -286,16 +202,38 @@ class set_problem:
         nDecVar = np.sum(self.nGrid)
         nSegment = len(self.nGrid)
 
+        A = []
+        b = []
+        H = []
+        t = []
+        D = []
+        DD = []
+        DDD = []
         for i in range(nSegment):
-            # todo: multiple segments
-            #  Sol_all.append(self.chebysegment(icost, n, d, alpha_beta))
-            A, b, H, t, D, DD, DDD = self.chebysegment(icost, n, d, alpha_beta)
+            iA, ib, iH, it, iD, iDD, iDDD = self.chebysegment(icost, n[i], d[i:i+2], alpha_beta)
+            A.append(iA)
+            b.append(ib)
+            H.append(iH)
+            t.append(it)
+            D.append(iD)
+            DD.append(iDD)
+            DDD.append(iDDD)
+
+        A = block_diag(*A)
+        H = block_diag(*H)
+        D = block_diag(*D)
+        DD = block_diag(*DD)
+        DDD = block_diag(*DDD)
+
+        b = np.hstack(b)
+        t = np.hstack(t)
+
         nCstBc = 2*nSegment+2*(nSegment+1)
 
         Aeq = np.zeros((nCstBc, nDecVar))
         beq = np.zeros(nCstBc)
-        finalIdx = np.cumsum(self.nGrid)
-        startIdx = [0] #+ [0, finalIdx[1:-1]]
+        finalIdx = np.cumsum(self.nGrid)-1
+        startIdx = np.hstack(([0], finalIdx[:-1]+1)) #+ [0, finalIdx[1:-1]]
 
         cstIdx = -1
         for iseg in range(nSegment):
@@ -305,7 +243,7 @@ class set_problem:
 
         for iseg in range(nSegment):
             cstIdx = cstIdx + 1
-            Aeq[cstIdx, finalIdx[iseg]-1] = 1
+            Aeq[cstIdx, finalIdx[iseg]] = 1
             beq[cstIdx] = self.qNode[iseg+1]
 
         cstIdx = cstIdx + 1
@@ -335,45 +273,63 @@ class set_problem:
                                  solver='scs', #,'ecos'
                                  )
 
-        if solution.found:
+        if solution:
+            sol_stat = solution.extras.get('status_val')
+            print(f'For {icost}, the solution was {solution.found} with status {sol_stat}')
             sol = solution.x
             cost = solution.obj
+
+            t_interp = []
+            grid_q = []
+            grid_dq = []
+            q = []
+            dq = []
+            ddq = []
+            dddq = []
             for iseg in range(nSegment):
-                tSpan = [t[0], t[-1]]
-                grid_q = sol[startIdx[iseg]:finalIdx[iseg]]
-                grid_q_derivatives = self.chebyDerivative(grid_q, tSpan, D, DD, DDD)
-                grid_dq = grid_q_derivatives[0]
-                t_interp = np.linspace(t[0], t[-1], 101)
+
+                tSpan = [t[startIdx[iseg]], t[finalIdx[iseg]]]
+                igrid_q = sol[startIdx[iseg]:finalIdx[iseg]+1]
+                igrid_q_derivatives = self.chebyDerivative(igrid_q, tSpan,
+                                                           D[startIdx[iseg]:finalIdx[iseg]+1, startIdx[iseg]:finalIdx[iseg]+1],
+                                                           DD[startIdx[iseg]:finalIdx[iseg]+1, startIdx[iseg]:finalIdx[iseg]+1],
+                                                           DDD[startIdx[iseg]:finalIdx[iseg]+1, startIdx[iseg]:finalIdx[iseg]+1])
+                igrid_dq = igrid_q_derivatives[0]
+                # t_interp = np.linspace(tSpan[0], tSpan[-1], 101)
                 if second_joint ==1:
                     t_interp = np.linspace(0, t[-1], 101)
                     t_inter_crop = t_interp[np.where(t_interp==np.round(t[0], 3))[0][0]:]
                     q = np.hstack(
                         (np.ones((1,t_interp.shape[0]-t_inter_crop.shape[0]))*self.qNode[0],
-                         self.chebyInterpolate(grid_q, t_inter_crop, tSpan)
+                         self.chebyInterpolate(igrid_q, t_inter_crop, tSpan)
                          ))
                     dq = np.hstack(
                         (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
-                         self.chebyInterpolate(grid_dq, t_inter_crop, tSpan)
+                         self.chebyInterpolate(igrid_dq, t_inter_crop, tSpan)
                          ))
                     ddq = np.hstack(
                         (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
-                         self.chebyInterpolate(grid_q_derivatives[1], t_inter_crop, tSpan)
+                         self.chebyInterpolate(igrid_q_derivatives[1], t_inter_crop, tSpan)
                          ))
                     dddq = np.hstack(
                         (np.zeros((1,t_interp.shape[0]-t_inter_crop.shape[0])),
-                         self.chebyInterpolate(grid_q_derivatives[2], t_inter_crop, tSpan)
+                         self.chebyInterpolate(igrid_q_derivatives[2], t_inter_crop, tSpan)
                          ))
                 else:
-                    t_interp = np.linspace(t[0], t[-1], 101)
-                    q = self.chebyInterpolate(grid_q, t_interp, tSpan)
-                    dq = self.chebyInterpolate(grid_dq, t_interp, tSpan)
-                    ddq = self.chebyInterpolate(grid_q_derivatives[1], t_interp, tSpan)
-                    dddq = self.chebyInterpolate(grid_q_derivatives[2], t_interp, tSpan)
+                    t_interp.append(np.linspace(tSpan[0], tSpan[-1], 101))
+                    q.append(self.chebyInterpolate(igrid_q, np.linspace(tSpan[0], tSpan[-1], 101), tSpan))
+                    dq.append(self.chebyInterpolate(igrid_dq, np.linspace(tSpan[0], tSpan[-1], 101), tSpan))
+                    ddq.append(self.chebyInterpolate(igrid_q_derivatives[1], np.linspace(tSpan[0], tSpan[-1], 101), tSpan))
+                    dddq.append(self.chebyInterpolate(igrid_q_derivatives[2], np.linspace(tSpan[0], tSpan[-1], 101), tSpan))
+
+                grid_q.append(igrid_q)
+                grid_dq.append(igrid_dq)
 
         else:
             print('No convergence')
 
-        return [t, grid_q, grid_dq, t_interp, q, dq, ddq, dddq, cost]
+        return [t, np.hstack(grid_q), np.hstack(grid_dq),
+                np.hstack(t_interp), np.hstack(q), np.hstack(dq), np.hstack(ddq), np.hstack(dddq), cost]
 
 class set_problem_ocp:
     def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):

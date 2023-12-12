@@ -26,6 +26,14 @@ sns.set_context("paper", font_scale=1.3)
 
 from scipy.interpolate import griddata
 
+def colorbar(n):
+    return dict(
+        tick0 = 0,
+        title = "",
+        tickmode = "array",
+        tickvals = 10**np.linspace(0, n, n+1),
+        ticktext = 10**np.linspace(0, n, n+1))
+
 def multi_plot(fig, df, pos,  z,):
     x = df.mu
     y = df.sigma
@@ -75,25 +83,29 @@ def j_using_simps(x, t, T, Nt):
     return np.sqrt(simpson(j_int ** 2, x=t[:-2]))
 
 def kinetic_time_using_simps(x, t, T, Nt):
-    t_from_MT = np.linspace(0, x['MT'], Nt)
-    v_int = lognpdf(t_from_MT, x['mu'], x['sigma'])
-    vt = v_int*t_from_MT
-    return np.sqrt(simpson(vt**2, x=t_from_MT, axis=0))
+    t_from_MT = np.linspace(x['tmin'], x['tmax'], Nt)
+    v_int = lognpdf(t, x['mu'], x['sigma'])
+    # vt = v_int*t
+    vt = v_int * x['tmax']
+    # vt = v_int*x['MT']
+    return np.sqrt(simpson(vt**2, x=t, axis=0))
 
 def jerk_time_using_simps(x, t, T, Nt):
-    t_from_MT = np.linspace(0, x['MT'], Nt)
-    v_int = lognpdf(t_from_MT, x['mu'], x['sigma'])
-    a_int = np.diff(v_int)/(x['MT']/Nt)
-    j_int = np.diff(a_int) / (x['MT'] / Nt)
-    jt = j_int*t_from_MT[:-2]
-    return np.sqrt(simpson(jt**2, x=t_from_MT[:-2]))
+    t_from_MT = np.linspace(x['tmin'], x['tmax'], Nt)
+    v_int = lognpdf(t, x['mu'], x['sigma'])
+    a_int = np.diff(v_int)/(T/Nt)
+    j_int = np.diff(a_int) / (T / Nt)
+    # jt = j_int*t[:-2]
+    jt = j_int * x['tmax']
+    # jt = j_int * x['MT']
+    return np.sqrt(simpson(jt**2, x=t[:-2]))
 
 
 nb = 11
-NB = 21
+NB = 201
 
 Nt = 1000
-T = 0.7
+T = 0.8
 t = np.linspace(0, T, Nt)
 
 # Lognormal definitions
@@ -142,7 +154,7 @@ plt.plot(t[:-1], a/100, label='acceleration/100')
 plt.plot(t[:-2], j/1000, label ='Jerk/1000')
 plt.legend()
 plt.show(block=False)
-plt.close()
+# plt.close()
 
 v_L2 = np.zeros((NB, NB))
 a_L2 = np.zeros((NB, NB))
@@ -152,7 +164,7 @@ v_simps = np.zeros((NB, NB))
 a_simps = np.zeros((NB, NB))
 j_simps = np.zeros((NB, NB))
 
-plot_timeseries_mu_sigma = False
+plot_timeseries_mu_sigma = True
 if plot_timeseries_mu_sigma:
      # Mu variable, sigma set
     sigma = 0.35 #Sigma is set to its median value to avoid fringe effects
@@ -174,7 +186,7 @@ if plot_timeseries_mu_sigma:
         mu_var = mu_var.join(pd.DataFrame({col_name: j_vect_mu[:, n]}))
 
     # Sigma variable, mu set
-    mu = -1.9 #Sigma is set to its median value to avoid fringe effects
+    mu = -2.25 #1.95 #Sigma is set to its median value to avoid fringe effects
     v_vect_sigma = np.zeros((Nt, NB))
     a_vect_sigma = np.zeros((Nt-1, NB))
     j_vect_sigma = np.zeros((Nt-2, NB))
@@ -205,9 +217,9 @@ if plot_timeseries_mu_sigma:
 
     # Plot timeseries response as a function of sigma ------------------------------------
     g_sigma = sns.relplot(data=df_sigma_mu[df_sigma_mu.which_var=='sigma'], x='time', y='value', hue='sigma_mu', row='var_type', col='which_var',
-                    kind='line', facet_kws={'sharey': False, 'sharex': True}, legend=False, palette='winter', aspect=2, height=2.5)
+                    kind='line', facet_kws={'sharey': False, 'sharex': True}, legend=False, palette='crest', aspect=2, height=2.5)
     norm = plt.Normalize(df_sigma_mu.sigma.min(), df_sigma_mu.sigma.max())
-    sm = plt.cm.ScalarMappable(cmap="winter", norm=norm)
+    sm = plt.cm.ScalarMappable(cmap="crest", norm=norm)
     sm.set_array([])
     var_list = ['Velocity [m.s⁻¹]', 'Acceleration [m.s⁻²]', 'Jerk [m.s⁻³]']
     cbar = plt.colorbar(sm, ax=g_sigma.axes[:], shrink=0.5)
@@ -217,26 +229,26 @@ if plot_timeseries_mu_sigma:
     formatter.set_powerlimits((-1, 1))
     for i, ax in enumerate(g_sigma.axes.flatten()):
         if i == 0:
-            ax.set_title('Profiles for μ = -1.9', y=1.2)
+            ax.set_title(f'Profiles for μ = -2.25', y=1.2)
         else:
             ax.set_title('')
         ax.set_xlabel('Time [s]')
         ax.set_ylabel(var_list[i])
-        ax.set_xlim(0, 0.7)
-        ax.set_xticks([0, 0.2, 0.4, 0.6])
+        ax.set_xlim(0, 0.4)
+        ax.set_xticks([0, 0.2, 0.4])
         ax.tick_params(axis="x", direction="in")
         ax.tick_params(axis="y", direction="in")
         ax.ticklabel_format(style='sci', axis='y')
         ax.yaxis.set_major_formatter(formatter)
         ax.spines[['right', 'top']].set_visible(True)
-    plt.savefig('VAJ_time_sigma.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+    plt.savefig('./Paper/VAJ_time_sigma.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
     plt.close()
 
     # Plot timeseries response as a function of mu ------------------------------------
     g_mu = sns.relplot(data=df_sigma_mu[df_sigma_mu.which_var=='mu'], x='time', y='value', hue='sigma_mu', row='var_type', col='which_var',
-                    kind='line', facet_kws={'sharey': False, 'sharex': True}, legend=False, palette='cool', aspect=2, height=2.5)
+                    kind='line', facet_kws={'sharey': False, 'sharex': True}, legend=False, palette='flare', aspect=2, height=2.5)
     norm = plt.Normalize(df_sigma_mu.mu.min(), df_sigma_mu.mu.max())
-    sm = plt.cm.ScalarMappable(cmap="cool", norm=norm)
+    sm = plt.cm.ScalarMappable(cmap="flare", norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=g_mu.axes[:], shrink=0.5)
     cbar.ax.set_title('μ')
@@ -247,60 +259,66 @@ if plot_timeseries_mu_sigma:
             ax.set_title('')
         ax.set_xlabel('Time [s]')
         ax.set_ylabel(var_list[i])
-        ax.set_xlim(0, 0.7)
-        ax.set_xticks([0, 0.2, 0.4, 0.6])
+        ax.set_xlim(0, 0.4)
+        ax.set_xticks([0, 0.2, 0.4])
         ax.tick_params(axis="x", direction="in")
         ax.tick_params(axis="y", direction="in")
         ax.ticklabel_format(style='sci', axis='y')
         ax.yaxis.set_major_formatter(formatter)
         ax.spines[['right', 'top']].set_visible(True)
-    plt.savefig('VAJ_time_mu.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+    plt.savefig('./Paper/VAJ_time_mu.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
     plt.close()
 
 print('so far so good')
 
-cost = pd.DataFrame(columns=['mu', 'sigma', 'MT',
+cost = pd.DataFrame(columns=['mu', 'sigma', 'MT', 'tmin', 'tmax',
                              'v', 'a', 'j', 'A) Kinetic Energy',
                              'B) Jerk', 'C) Jerk & Kinetic Energy','D) Kinetic Energy x Time',
                              'E) Jerk x Time', 'F) (Jerk & Kinetic Energy) x Time'],
                     index=np.arange(1, sigma_vect.shape[0]*mu_vect.shape[0]+1, 1))
-cost_BEN = pd.DataFrame(columns=['mu', 'sigma', 'MT',
-                                 'v', 'a', 'j', 'A) Kinetic Energy',
-                                 'B) Jerk', 'C) Jerk & Kinetic Energy','D) Kinetic Energy x Time',
-                                 'E) Jerk x Time', 'F) (Jerk & Kinetic Energy) x Time'],
-                        index=np.arange(1, sigma_vect.shape[0]*mu_vect.shape[0]+1, 1))
+# cost_BEN = pd.DataFrame(columns=['mu', 'sigma', 'MT', 'tmin', 'tmax',
+#                                  'v', 'a', 'j', 'A) Kinetic Energy',
+#                                  'B) Jerk', 'C) Jerk & Kinetic Energy','D) Kinetic Energy x Time',
+#                                  'E) Jerk x Time', 'F) (Jerk & Kinetic Energy) x Time'],
+#                         index=np.arange(1, sigma_vect.shape[0]*mu_vect.shape[0]+1, 1))
 mu_sigma = np.array(list(itertools.product(mu_vect, sigma_vect)))
 cost.mu = mu_sigma.T[0]
 cost.sigma = mu_sigma.T[1]
 cost.MT = 2*np.exp(cost.mu)*np.sinh(3*cost.sigma)
+cost.tmin = np.exp(cost.mu-3*cost.sigma)
+cost.tmax = np.exp(cost.mu+3*cost.sigma)
 
-cost_BEN.mu = mu_sigma.T[0]
-cost_BEN.sigma = mu_sigma.T[1]
-cost_BEN.MT = 2*np.exp(cost.mu)*np.sinh(3*cost.sigma)
+# cost_BEN.mu = mu_sigma.T[0]
+# cost_BEN.sigma = mu_sigma.T[1]
+# cost_BEN.MT = 2*np.exp(cost_BEN.mu)*np.sinh(3*cost_BEN.sigma)
+# cost_BEN.tmin = np.exp(cost_BEN.mu-3*cost_BEN.sigma)
+# cost_BEN.tmax = np.exp(cost_BEN.mu+3*cost_BEN.sigma)
 
 cost.v = cost.apply(lambda x: np.sqrt(simpson(lognpdf(t, x['mu'], x['sigma'])**2, x=t, axis=0)), axis=1)
 cost.a = cost.apply(lambda x: a_using_simps(x, t, T, Nt), axis=1)
 cost.j = cost.apply(lambda x: j_using_simps(x, t, T, Nt), axis=1)
 
-cost_BEN.v = cost_BEN.apply(lambda x: np.linalg.norm(lognpdf(t, x['mu'], x['sigma']), ord=2), axis=1)
-cost_BEN.a = cost_BEN.apply(lambda x: a_using_norm(x, t, T, Nt), axis=1)
-cost_BEN.j = cost_BEN.apply(lambda x: j_using_norm(x, t, T, Nt), axis=1)
-
+# cost_BEN.v = cost_BEN.apply(lambda x: np.linalg.norm(lognpdf(t, x['mu'], x['sigma']), ord=2), axis=1)
+# cost_BEN.a = cost_BEN.apply(lambda x: a_using_norm(x, t, T, Nt), axis=1)
+# cost_BEN.j = cost_BEN.apply(lambda x: j_using_norm(x, t, T, Nt), axis=1)
+alpha_beta = 5000
 cost['A) Kinetic Energy'] = cost.v
 cost['B) Jerk'] = cost.j
-cost['C) Jerk & Kinetic Energy'] = cost.j + 1000*cost.v
-cost['D) Kinetic Energy x Time'] = cost.MT*cost.v#cost.apply(lambda x: kinetic_time_using_simps(x, t, T, Nt), axis=1)
-cost['E) Jerk x Time'] = cost.MT*cost.j#cost.apply(lambda x: jerk_time_using_simps(x, t, T, Nt), axis=1)
-cost['F) (Jerk & Kinetic Energy) x Time'] = cost['E) Jerk x Time'] + 1000 * cost['D) Kinetic Energy x Time']
+cost['C) Jerk & Kinetic Energy'] = cost.j + alpha_beta * cost.v
+# cost['D) Kinetic Energy x Time'] = cost.v * cost.MT**2
+cost['D) Kinetic Energy x Time'] = cost.apply(lambda x: kinetic_time_using_simps(x, t, T, Nt), axis=1)
+# cost['E) Jerk x Time'] = cost.j * cost.MT**2
+cost['E) Jerk x Time'] = cost.apply(lambda x: jerk_time_using_simps(x, t, T, Nt), axis=1)
+cost['F) (Jerk & Kinetic Energy) x Time'] = cost['E) Jerk x Time'] + alpha_beta * cost['D) Kinetic Energy x Time'] #1000
 
-cost_BEN['A) Kinetic Energy'] = cost_BEN.v
-cost_BEN['B) Jerk'] = cost_BEN.j
-cost_BEN['C) Jerk & Kinetic Energy'] = cost_BEN.j + 1000*cost_BEN.v
-cost_BEN['D) Kinetic Energy x Time'] = cost_BEN.MT*cost_BEN.v
-cost_BEN['E) Jerk x Time'] = cost_BEN.MT*cost_BEN.j
-cost_BEN['F) (Jerk & Kinetic Energy) x Time'] = cost_BEN.MT*cost_BEN['C) Jerk & Kinetic Energy']
+# cost_BEN['A) Kinetic Energy'] = cost_BEN.v
+# cost_BEN['B) Jerk'] = cost_BEN.j
+# cost_BEN['C) Jerk & Kinetic Energy'] = cost_BEN.j + alpha_beta*cost_BEN.v
+# cost_BEN['D) Kinetic Energy x Time'] = cost_BEN.MT*cost_BEN.v
+# cost_BEN['E) Jerk x Time'] = cost_BEN.MT*cost_BEN.j
+# cost_BEN['F) (Jerk & Kinetic Energy) x Time'] = cost_BEN.MT*cost_BEN['C) Jerk & Kinetic Energy']
 
-plot3d = False
+plot3d = True
 if plot3d:
     titles = ['A) Kinetic Energy', 'B) Jerk', 'C) Jerk & Kinetic Energy',
                                 'D) Kinetic Energy x Time', 'E) Jerk x Time', 'F) (Jerk & Kinetic Energy) x Time']
@@ -314,11 +332,17 @@ if plot3d:
         col = ii%3
         df = cost[['mu', 'sigma', iplot]]
         df = df.pivot(values=iplot, columns='mu', index='sigma')
-        fig.add_trace(go.Surface(x=df.columns.values, y=df.index.values, z=df.values,  colorscale='Viridis',
+        fig.add_trace(go.Surface(x=df.columns.values, y=df.index.values, z=df.values,
+                                 colorscale='viridis_r',
+                                 # colorbar=colorbar(df.values),
                                  # surfacecolor=2*np.exp(df.columns.values)*np.sinh(df.index.values), cmin = cost.MT.min(), cmax=cost.MT.max(),
-                                 contours=  {"z": {"show": True, "start": df.values.min(), "end": df.values.max(), "size": (df.values.max()-df.values.min())/20,
+                                 contours=  {"z": {"show": True,
+                                                   "start": df.values.min(),
+                                                   "end": df.values.max(),
+                                                   "size": (df.values.max()-df.values.min())/30,
                                                    "color":"white"}},
-                                 showscale=False,), row=row+1, col=col+1,
+                                 showscale=False,
+                                 ), row=row+1, col=col+1,
                      )
     fig.update_layout(
         font_family="Times New Roman",
@@ -328,39 +352,42 @@ if plot3d:
     fig.update_yaxes(title_font_family="Times New Roman")
     fig.update_scenes(xaxis_title_text='μ',
                       yaxis_title_text='σ',
-                      zaxis_title_text='')
-    fig.write_html("cost_functions.html")
+                      zaxis_title_text='',
+                      # zaxis_type='log',
+                      # zaxis_dtick=1,
+                      )
+    fig.write_html(f"./Paper/cost_functions_{alpha_beta}_tend.html")
     fig.show()
 
-df_mu_19 = cost[cost.mu==-1.85]
-df = df_mu_19[['sigma','v', 'a', 'j']].melt('sigma')
+df_mu_225 = cost[cost.mu==-2.25]
+df = df_mu_225[['sigma','v', 'a', 'j']].melt('sigma')
 g_mu = sns.relplot(data=df, x='sigma', y='value', row='variable', kind='line',
-            facet_kws={'sharey': False, 'sharex': True}, legend=False, aspect=2, height=2.5)
+            facet_kws={'sharey': False, 'sharex': True}, legend=False, aspect=1.62, height=2.5)
 col_names = ['Velocity norm', 'Acceleration norm', 'Jerk norm']
 formatter = ticker.ScalarFormatter(useMathText=True)
 formatter.set_scientific(True)
 formatter.set_powerlimits((-1, 1))
 for i, ax in enumerate(g_mu.axes.flatten()):
     if i == 0:
-        ax.set_title('Profiles for μ = -1.85', y=1.2)
+        ax.set_title('Profiles for μ = -2.25', y=1.2)
     else:
         ax.set_title('')
     ax.set_xlabel('σ')
     ax.set_ylabel(col_names[i])
-    ax.set_xlim(0.1, 0.6)
-    ax.set_xticks([0.1, 0.35, 0.6])
+    ax.set_xlim(sigma_vect.min(), sigma_vect.max())
+    ax.set_xticks([sigma_vect.min(), (sigma_vect.max()+sigma_vect.min())/2, sigma_vect.max()])
     ax.tick_params(axis="x", direction="in")
     ax.tick_params(axis="y", direction="in")
     ax.ticklabel_format(style='sci', axis='y')
     ax.yaxis.set_major_formatter(formatter)
     ax.spines[['right', 'top']].set_visible(True)
-plt.savefig('VAJ_cost_sigma.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+plt.savefig('./Paper/VAJ_cost_sigma.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
 plt.close()
 
 df_sigma_35 = cost[cost.sigma==0.35]
 df = df_sigma_35[['mu','v', 'a', 'j']].melt('mu')
 g_sigma = sns.relplot(data=df, x='mu', y='value', row='variable', kind='line',
-            facet_kws={'sharey': False, 'sharex': True}, legend=False, aspect=2, height=2.5)
+            facet_kws={'sharey': False, 'sharex': True}, legend=False, aspect=1.62, height=2.5)
 for i, ax in enumerate(g_sigma.axes.flatten()):
     if i == 0:
         ax.set_title('Profiles for σ = 0.35', y=1.2)
@@ -368,14 +395,14 @@ for i, ax in enumerate(g_sigma.axes.flatten()):
         ax.set_title('')
     ax.set_xlabel('μ')
     ax.set_ylabel(col_names[i])
-    ax.set_xlim(-2.2, -1.5)
-    ax.set_xticks([-2.2, -1.85, -1.5])
+    ax.set_xlim(mu_vect.min(), mu_vect.max())
+    ax.set_xticks([mu_vect.min(), (mu_vect.max()+mu_vect.min())/2, mu_vect.max()])
     ax.tick_params(axis="x", direction="in")
     ax.tick_params(axis="y", direction="in")
     ax.ticklabel_format(style='sci', axis='y')
     ax.yaxis.set_major_formatter(formatter)
     ax.spines[['right', 'top']].set_visible(True)
-plt.savefig('VAJ_cost_mu.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+plt.savefig('./Paper/VAJ_cost_mu.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
 plt.close()
 
 

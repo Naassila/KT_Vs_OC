@@ -12,6 +12,27 @@ from matplotlib import ticker
 from matplotlib.widgets import Slider, Button, RadioButtons
 from mpl_toolkits.mplot3d import axes3d
 
+from casadi import MX, SX, vertcat, horzcat, gradient
+
+from bioptim import(
+BiorbdModel,
+ConfigureProblem,
+OptimalControlProgram,
+DynamicsFcn,
+DynamicsEvaluation,
+DynamicsFunctions,
+DynamicsList,
+Dynamics,
+BoundsList,
+InitialGuessList,
+NonLinearProgram,
+ObjectiveFcn,
+Objective,
+ObjectiveList,
+PenaltyController,
+Solver,
+)
+
 params = {'legend.fontsize': 'medium',
           'axes.labelsize': 'medium',
           'axes.titlesize':'medium',
@@ -24,9 +45,75 @@ plt.rcParams['font.family'] ="serif"
 plt.rcParams.update({'font.size': 10})
 sns.set_context("paper", font_scale=1.3)
 
+
+def custom_func_comp(controller: PenaltyController,
+                     marker:str,
+                     alpha:float,
+                     ):
+    q = controller.states['q'].mx
+
+
+    # return objective
+
+
 L1 = 0.3 #m
 L2 = 0.28 #m
+R = 0.03 #m
+m1 = 2.4 #kg
+m2 = 1.8 #kg
+I1atcenter = m1*(R**2/4+L1**2/12)
+I2atcenter = m2*(R**2/4+L2**2/12)
+I1atorigin = I1atcenter+m1*(L1/2)**2
+I2atorigin = I2atcenter+m2*(L2/2)**2
 nGrid = [15] # Order of interpolating polynoms
+
+bio_model = BiorbdModel("arm.bioMod")
+dynamics = Dynamics(DynamicsFcn.JOINTS_ACCELERATION_DRIVEN)
+
+x_bounds = BoundsList()
+x_bounds["q"] = bio_model.bounds_from_ranges("q")
+x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot")
+# x_bounds["q"][:, [0, -1]] = np.deg2rad([30, 60]) # first and last state x_bound[phase][q and qdot, nodes]
+x_bounds["q"][0, [0, -1]] = np.deg2rad([30, 60])
+x_bounds["q"][1, [0, -1]] = np.deg2rad([-70, 10])
+x_bounds["qdot"][:, [0, -1]] = 0
+
+# Define control path constraint
+n_qddot_joints = bio_model.nb_qddot - bio_model.nb_root
+qddot_joints_min, qddot_joints_max, qddot_joints_init = -1000, 1000, 0
+u_bounds = Bounds([qddot_joints_min] * n_qddot_joints, [qddot_joints_max] * n_qddot_joints)
+
+u_bounds = BoundsList()
+u_bounds['qddot_joints'] = [-1000, 1000], [-1000, 1000]
+
+objective_functions = ObjectiveList()
+objective_functions.add(
+    custom_func_comp,
+    custom_type=ObjectiveFcn.Lagrange,
+    quadratic=True,
+    alpha = 10000,
+    marker="COM_hand",
+    # ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau"
+)
+
+
+ocp = OptimalControlProgram(
+        bio_model,
+        dynamics,
+        n_shooting=50,
+        phase_time=0.3,
+        x_bounds=x_bounds,
+        u_bounds=u_bounds,
+        objective_functions=objective_functions,
+        assume_phase_dynamics=True,
+    )
+# ocp.check_conditioning()
+
+solver = Solver.IPOPT(show_online_optim=False)
+sol = ocp.solve(solver)
+
+q = sol.states['q']
+dq = sol.states['qdot'][1]
 
 # Set problem
 qLow = np.deg2rad([-110, 5])

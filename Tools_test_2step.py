@@ -1,8 +1,6 @@
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import fsolve, least_squares
-from scipy.linalg import block_diag
 from qpsolvers import solve_qp
 from qpsolvers.problem import Problem
 from qpsolvers.solve_problem import solve_problem
@@ -46,7 +44,7 @@ def home_fit_lognpdf(t , f, ti, tj, u_bounds, s_bounds):
 def inflexion_points_logparam(t, f, df, s_bounds):
     # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4668345
     abf = np.abs(f)
-    df = df # was -df
+    df = - df
     t_m = t[abf.argmax()]
     i1 = df.argmax()
     tinf1 = t[i1]
@@ -75,97 +73,16 @@ def inflexion_points_logparam(t, f, df, s_bounds):
 
     return mu, sigma, D, t0
 
-def detect_onset(x, threshold, n_above = 1, n_below= 0,  threshold2= None, n_above2= 1):
-
-    if x.ndim != 1:
-        raise ValueError(
-            f"detect_onset works only for one-dimensional vector. You have {x.ndim} dimensions."
-        )
-    x = np.atleast_1d(x.copy())
-    x[np.isnan(x)] = -np.inf
-    inds = np.nonzero(x >= threshold)[0]
-    if inds.size:
-        # initial and final indexes of almost continuous data
-        inds = np.vstack(
-            (
-                inds[np.diff(np.hstack((-np.inf, inds))) > n_below + 1],
-                inds[np.diff(np.hstack((inds, np.inf))) > n_below + 1],
-            )
-        ).T
-        # indexes of almost continuous data longer than or equal to n_above
-        inds = inds[inds[:, 1] - inds[:, 0] >= n_above - 1, :]
-        # minimum amplitude of n_above2 values in x to detect
-        if threshold2 is not None and inds.size:
-            idel = np.ones(inds.shape[0], dtype=bool)
-            for i in range(inds.shape[0]):
-                if (
-                    np.count_nonzero(x[inds[i, 0] : inds[i, 1] + 1] >= threshold2)
-                    < n_above2
-                ):
-                    idel[i] = False
-            inds = inds[idel, :]
-    if not inds.size:
-        inds = np.array([])
-    return inds
-def inflexion_points_logparam_robust(t, f, df, s_bounds, plot_check=False):
-    # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4668345
-    # Basically, we need to identify the following events:
-    # t_m: occurence of maximum velocity
-    # tinf1: occurence of maximum acceleration
-    # tinf2: occurence of minimum acceleration
-    # tmin: min bound of the interval
-    # tmax max bound of the interval
-    ab_v = np.abs(f)
-    df = df # was -df
-    onsets = detect_onset(ab_v, ab_v.max()*1/100)[0]
-    tmin = t[onsets[0]]
-    tmax = t[onsets[1]]
-    iv_max = ab_v.argmax()
-    t_m = t[iv_max]
-    i1 = df.argmax()
-    tinf1 = t[i1]
-    i2 = df.argmin()
-    tinf2 = t[i2]
-    v_0 = ab_v.max()*1/100 # 1% max velocity to identify start and end of lognormal
-    # vmin = (ab_v-v_0).argmin()
-    # sort_indices = np.argsort(ab_v - ab_v.max() * 1 / 100)
-    # imin_max = np.argsort(np.abs(np.diff(sort_indices)))[::-1][:2]
-    # if iv_max<imin_max[1] and iv_max>imin_max[0]:
-    #     tmax = imin_max[1]
-    #     tmin = imin_max[0]
-    # else:
-    #     ordered_indices = np.argsort(np.abs(np.diff(sort_indices)))[::-1]
-    #     tmin = t[ordered_indices[ordered_indices<iv_max][0]]
-    #     tmax = t[ordered_indices[ordered_indices>iv_max][0]]
-
-    if plot_check:
-        plt.plot(t, f, label='Velocity')
-        plt.plot(t, ab_v-v_0)
-        # plt.plot(t, df, label='Acceleration')
-        for it in [t_m, tmin, tmax, tinf1, tinf2]:
-            plt.axvline(x = it)
-
-    f = lambda x: func_sigma(x, t_m, tmin, tmax)
-    res = least_squares(f, s_bounds[-1], bounds=(s_bounds[0], s_bounds[1]))
-    sigma = res.x
-
-    alpha1 = np.exp(-sigma * (sigma + np.sqrt(sigma ** 2 + 4)) / 2)
-    alpha2 = np.exp(-sigma * (sigma - np.sqrt(sigma ** 2 + 4)) / 2)
-    mu = sigma**2 + np.log((np.abs(tinf2-tinf1))/(alpha2-alpha1))
-    #TODO: confirm abs value
-
-    t0 = t_m-np.exp(mu-sigma**2)
-    D = ab_v.max()*sigma*np.sqrt(2*np.pi)*np.exp(mu-0.5*sigma**2)
-
-    return mu, sigma, D, t0
 class set_problem:
-    def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):
+    def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid, q_pre = None, other_param = None):
         self.qLow = qLow
         self.qUpp = qUpp
         self.dqMax = dqMax
         self.tNode = tNode
         self.qNode = qNode
         self.nGrid = nGrid
+        self.q_pre = q_pre
+        self.other_param = other_param
 
     def chebyInterpolate(self, f, t_inter, t_bounds):
         if t_inter[0]<t_bounds[0] or t_inter[-1]>t_bounds[-1]:
@@ -263,22 +180,41 @@ class set_problem:
         DDD = np.matmul(DD, D) # jerk
 
         t,w = self.chebyPoints(n, d)
+        if self.q_pre is not None:
+            A = np.vstack((D, -D))
+            b = self.dqMax * np.ones(2 * n)
 
-        A = np.vstack((D, -D))
-        b = self.dqMax*np.ones(2*n)
+            if not all(self.q_pre.Time.values == t):
+                raise ValueError('Time array of first and second joint do not match')
 
-        if icost == 'Minimize jerk':
-            W = np.diag(w)
-            H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
-        elif icost == 'Minimize jerk and time':
-            W = np.diag(w) * np.diag(t**2)
-            H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
-        elif icost == 'Minimize jerk, energy and time':
-            W = np.diag(w) * np.diag(t**2)
-            H = 0.5 * (np.matmul(np.transpose(DDD), np.matmul(W, DDD))+
-                       alpha_beta*np.matmul(np.transpose(D), np.matmul(W, D)))
+            if icost == 'Minimize jerk':
+                W = self.other_param[1] * np.diag(w) + self.other_param[0] * np.diag(self.q_pre.dq.values)
+                H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
+            elif icost == 'Minimize jerk and time':
+                W = (self.other_param[1] * np.diag(w) + self.other_param[0] * np.diag(self.q_pre.dddq.values)) * np.diag(t**2)
+                H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
+            elif icost == 'Minimize jerk, energy and time':
+                W = (self.other_param[1] * np.diag(w) + self.other_param[0] * np.diag(self.q_pre.dddq.values))  * np.diag(t**2)
+                H = 0.5 * (np.matmul(np.transpose(DDD), np.matmul(W, DDD))+
+                           alpha_beta*np.matmul(np.transpose(D), np.matmul(W, D)))
+            else:
+                raise ValueError('Unknown cost function')
         else:
-            raise ValueError('Unknown cost function')
+            A = np.vstack((D, -D))
+            b = self.dqMax*np.ones(2*n)
+
+            if icost == 'Minimize jerk':
+                W = np.diag(w)
+                H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
+            elif icost == 'Minimize jerk and time':
+                W = np.diag(w) * np.diag(t**2)
+                H = 0.5 * np.matmul(np.transpose(DDD), np.matmul(W, DDD))
+            elif icost == 'Minimize jerk, energy and time':
+                W = np.diag(w) * np.diag(t**2)
+                H = 0.5 * (np.matmul(np.transpose(DDD), np.matmul(W, DDD))+
+                           alpha_beta*np.matmul(np.transpose(D), np.matmul(W, D)))
+            else:
+                raise ValueError('Unknown cost function')
 
         return [A, b, H, t, D, DD, DDD]
 
@@ -301,12 +237,18 @@ class set_problem:
         for iseg in range(nSegment):
             cstIdx = cstIdx + 1
             Aeq[cstIdx, startIdx[iseg]] = 1
-            beq[cstIdx] = self.qNode[iseg]
+            if self.q_pre is not None:
+                beq[cstIdx] = self.other_param[1] * self.qNode[iseg] + self.other_param[0] * self.q_pre.q.values[0]
+            else:
+                beq[cstIdx] = self.qNode[iseg]
 
         for iseg in range(nSegment):
             cstIdx = cstIdx + 1
             Aeq[cstIdx, finalIdx[iseg]-1] = 1
-            beq[cstIdx] = self.qNode[iseg+1]
+            if self.q_pre is not None:
+                beq[cstIdx] = self.other_param[1] * self.qNode[iseg+1] + self.other_param[0] * self.q_pre.q.values[-1]
+            else:
+                beq[cstIdx] = self.qNode[iseg + 1]
 
         cstIdx = cstIdx + 1
         Aeq[cstIdx, :] = D[0, :] # null initial velocity
@@ -343,6 +285,7 @@ class set_problem:
                 grid_q = sol[startIdx[iseg]:finalIdx[iseg]]
                 grid_q_derivatives = self.chebyDerivative(grid_q, tSpan, D, DD, DDD)
                 grid_dq = grid_q_derivatives[0]
+                grid_dddq = grid_q_derivatives[2]
                 t_interp = np.linspace(t[0], t[-1], 101)
                 if second_joint ==1:
                     t_interp = np.linspace(0, t[-1], 101)
@@ -373,7 +316,7 @@ class set_problem:
         else:
             print('No convergence')
 
-        return [t, grid_q, grid_dq, t_interp, q, dq, ddq, dddq, cost]
+        return [t, grid_q, grid_dq, grid_dddq, t_interp, q, dq, ddq, dddq, cost]
 
 class set_problem_ocp:
     def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):

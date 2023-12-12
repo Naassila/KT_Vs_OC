@@ -6,7 +6,7 @@ import numpy as np
 from scipy.optimize import *
 import pandas as pd
 import seaborn as sns
-from Tools import *
+from Tools_constraint import *
 import matplotlib.pyplot as plt
 from matplotlib import ticker
 from matplotlib.widgets import Slider, Button, RadioButtons
@@ -26,19 +26,20 @@ sns.set_context("paper", font_scale=1.3)
 
 L1 = 0.3 #m
 L2 = 0.28 #m
-nGrid = [15] # Order of interpolating polynoms
+nGrid = [15, 15, 15] # Order of interpolating polynoms
 
 # Set problem
 qLow = np.deg2rad([-110, 5])
 qUpp = np.deg2rad([30, 140])
 dqMax = [20, 20] #Speed limit
 
-tNode = [[0, 0.3], [0.272, 0.8]]
-qNode = np.deg2rad([[30, -70],
-                    [60, 10]])
+tNode = [[0, 0.05, 0.2, 0.3], [0.272, 0.8]]
+qNode = np.deg2rad([[30, -10, -60, -70],
+                     [60, 90, 60, 10]])
 
 cost_functions = [
-    'Minimize jerk', 'Minimize jerk and time',
+    'Minimize jerk',
+    'Minimize jerk and time',
     'Minimize jerk, energy and time',
     # 'Lognormal profile'
 ]
@@ -55,9 +56,9 @@ for i, icost in enumerate(cost_functions[:]):
         problems.append(set_problem(qLow[ijoint] ,qUpp[ijoint],
                                     dqMax[ijoint], tNode,
                                     qNode[ijoint], nGrid))
-        n = nGrid[0]
+        n = nGrid
         d = tNode[0]
-        isol = problems[ijoint].solve(icost, n, d, 100000, second_joint=ijoint, )
+        isol = problems[ijoint].solve(icost, n, d, 100000,  )
         solution_cost.append(isol)
         dsol = pd.DataFrame({'Time':isol[3],
                              'q':isol[4][0],#np.rad2deg(isol[4][0]),
@@ -73,6 +74,7 @@ for i, icost in enumerate(cost_functions[:]):
             velocity['Wrist_qdot'] = velocity.Pelbow_qdot + L2 * dsol.dq
             velocity['x_wrist'] = velocity['x_elbow'] + L2 * np.cos(data_cost_smooth[2 * i].q + dsol.q)
             velocity['y_wrist'] = velocity['y_elbow'] + L2 * np.sin(data_cost_smooth[2 * i].q + dsol.q)
+            velocity.drop([100, 201], inplace=True)
             velocity['elbow_xydot'] = np.sqrt(
                 np.gradient(velocity['x_elbow'], velocity.Time) ** 2 + np.gradient(velocity['y_elbow'],
                                                                                    velocity.Time) ** 2)
@@ -99,38 +101,40 @@ g = sns.relplot(df_smooth, x='Time', y='Amplitude', hue='Cost', row='which', kin
                 row_order=['q', 'dq'], facet_kws={'sharey': False, 'sharex': True},
                 height = 2, aspect = 1.5)
 var_list = ['Angular position [°]', 'Angular Velocity [rad/s]']
-g.axes[0][0].set_ylim(-70, 30)
-g.axes[0][0].set_yticks([-70, -20, 30])
+# g.axes[0][0].set_ylim(-70, 30)
+# g.axes[0][0].set_yticks([-70, -20, 30])
 g.axes[0][0].set_ylabel(var_list[0])
 g.axes[0][0].set_title('Proximal joint')
 
-g.axes[0][1].set_ylim(10, 60)
-g.axes[0][1].set_yticks([10, 35, 60])
+# g.axes[0][1].set_ylim(10, 100)
+# g.axes[0][1].set_yticks([10, 55, 100])
 g.axes[0][1].set_title('Distal joint')
 
-g.axes[1][0].set_ylim(-15, 0)
-g.axes[1][0].set_yticks([-14, -7, 0])
+# g.axes[1][0].set_ylim(-15, 0)
+# g.axes[1][0].set_yticks([-14, -7, 0])
 g.axes[1][0].set_ylabel(var_list[1])
 g.axes[1][0].set_title('')
 
-g.axes[1][1].set_ylim(-7, 0)
-g.axes[1][1].set_yticks([-6, -3, 0])
+# g.axes[1][1].set_ylim(-15, 8)
+# g.axes[1][1].set_yticks([-14, -3, 8])
 g.axes[1][1].set_title('')
 for i, ax in enumerate(g.axes.flatten()):
     # ax.set_title('')
     ax.set_xlabel('Time [s]')
     ax.set_xlim(0, 0.3)
+    ax.axvline(0.1, color='k', linestyle=':', alpha=0.5)
+    ax.axvline(0.2, color='k', linestyle=':', alpha=0.5)
     # ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8])
     ax.tick_params(axis="x", direction="in")
     ax.tick_params(axis="y", direction="in")
     ax.ticklabel_format(style='sci', axis='y')
     ax.spines[['right', 'top']].set_visible(True)
 
-plt.savefig('./Paper/2DOF_free_joints.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+plt.savefig('./Paper/2DOF_constrained_joints_2.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
 plt.close()
 # Plot end(mid) effectors
 data_smooth = pd.concat(joint_output_smooth)
-data_smooth = data_smooth[['Time', 'elbow_xydot', 'Wrist_xydot', 'Cost']] # 'Pelbow_qdot', 'Wrist_qdot',
+data_smooth = data_smooth[['Time', 'elbow_xydot', 'Wrist_xydot', 'Cost']]
 data_smooth.rename(columns={'elbow_xydot':'Elbow', 'Wrist_xydot':'Wrist'}, inplace=True)
 df_smooth = data_smooth.melt(id_vars = ['Time', 'Cost'], var_name = 'which', value_name='Amplitude')
 g2 = sns.relplot(df_smooth, x='Time', y='Amplitude', hue='Cost', col='which', kind= 'line',
@@ -148,7 +152,7 @@ for i, ax in enumerate(g2.axes.flatten()):
     ax.ticklabel_format(style='sci', axis='y')
     ax.spines[['right', 'top']].set_visible(True)
 
-plt.savefig('./Paper/2DOF_free_effectors.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+plt.savefig('./Paper/2DOF_constrained_effectors_2.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
 plt.close()
 # Plot arm in time
 data_smooth = pd.concat(joint_output_smooth)
@@ -156,35 +160,33 @@ data_smooth = data_smooth[['Time', 'x_elbow', 'y_elbow', 'x_wrist','y_wrist', 'C
 sns_data = pd.concat([
     data_smooth[['Time', 'x_elbow', 'y_elbow','Cost']].rename(columns={'x_elbow':'x', 'y_elbow':'y'}).assign(Joint='Elbow'),
     data_smooth[['Time', 'x_wrist', 'y_wrist','Cost']].rename(columns={'x_wrist':'x', 'y_wrist':'y'}).assign(Joint='Wrist')])
-g3 = sns.relplot(data = sns_data, x='x', y='y', col='Cost', style='Joint', height=3, aspect=1, markers=['4', '4'], color='grey', alpha=0.5,
+g3 = sns.relplot(data = sns_data, x='x', y='y', hue='Cost', style='Joint', height=3, aspect=1, markers=['4', '4'], color='grey', alpha=0.5,
                  col_order=[ 'Minimize jerk', 'Minimize jerk and time',   'Minimize jerk, energy and time',], legend=False)
+data_smooth.Time = data_smooth.Time.round(5)
 data_smooth = data_smooth.loc[
     (data_smooth.Time ==0) |
-    (data_smooth.Time ==0.099) |
-    (data_smooth.Time ==0.201) |
+    (data_smooth.Time ==0.100) |
+    (data_smooth.Time ==0.2) |
     (data_smooth.Time ==0.3)]
 
+data = data_smooth[data_smooth.Cost =='Minimize jerk, energy and time']
+ax = g3.axes[0][0]
 colors_cost = ['#1f77b4', '#ff7f0e', '#2ca02c',]
-data_smooth.Time = np.round(data_smooth.Time, 1)
-for i, icost in enumerate([ 'Minimize jerk', 'Minimize jerk and time',   'Minimize jerk, energy and time',]):
-    ax = g3.axes.flatten()[i]
-    data = data_smooth[data_smooth.Cost==icost]
-    for iirow, irow in data.iterrows():
-        ax.plot([0, irow.x_elbow, irow.x_wrist], [0, irow.y_elbow, irow.y_wrist], color=colors_cost[i], alpha = 0.4 + iirow*0.2/34 )
-    if icost == 'Minimize jerk, energy and time':
-        ax.set_title('Minimize jerk, energy\nand time')
-    else:
-        ax.set_title(f'{icost}')
-    ax.set_xlabel('')
-    ax.set_ylabel('')
-    ax.set_xlim(-0.1, 0.8)
-    ax.set_ylim(-0.6, 0.6)
-    ax.set_aspect('equal')
-    ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
-    ax.tick_params(axis='y', which='both', left=False, labelleft=False)
-    ax.spines[['right', 'top']].set_visible(True)
 
-plt.savefig('./Paper/2DOF_free_in_time.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
+for iirow, irow in data.iterrows():
+    ax.plot([0, irow.x_elbow, irow.x_wrist], [0, irow.y_elbow, irow.y_wrist], color='k', alpha = 0.4 + iirow*0.2/104 )
+
+ax.set_title('')
+ax.set_xlabel('')
+ax.set_ylabel('')
+ax.set_xlim(-0.1, 0.8)
+ax.set_ylim(-0.6, 0.6)
+ax.set_aspect('equal')
+ax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
+ax.tick_params(axis='y', which='both', left=False, labelleft=False)
+ax.spines[['right', 'top']].set_visible(True)
+
+plt.savefig('./Paper/2DOF_constrained_in_time_2.svg', dpi=600, bbox_inches='tight', pad_inches=0.1, transparent=True)
 
 
 
