@@ -1,0 +1,41 @@
+version 3
+gravity 0 0 -9.81
+
+// SEGMENT DEFINITION
+
+segment r_humerus_rotation1
+    RTinMatrix    1
+    RT
+        1.0    0.0    0.0    0.0
+        0.0    1.0    0.0    0.0
+        0.0    0.0    1.0    0.0
+        0.0    0.0    0.0    1.0
+    rotations z
+    rangesQ	-110*pi/180 30*pi/180
+endsegment
+
+
+segment r_humerus
+    parent r_humerus_rotation1
+    RTinMatrix    1
+    RT
+        1.0    0.0    0.0    0.0
+        0.0    1.0    0.0    0.0
+        0.0    0.0    1.0    0.0
+        0.0    0.0    0.0    1.0
+    mass 2.4
+    inertia
+        0.01481    0.0    0.0
+        0.0    0.004551    0.0
+        0.0    0.0    0.01854
+    com    0.15 0 0
+    meshfile vtp/arm_r_humerus_2.stl
+endsegment
+
+
+    // Markers
+    marker    elbow
+        parent    r_humerus
+        position    0.3 0 0
+    endmarker
+

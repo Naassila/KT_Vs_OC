@@ -3,6 +3,8 @@ import bioviz
 from bioptim import OdeSolverBase
 from Biotiom_post_tools import *
 from Bioptim_functions_ocp import *
+from Tools import lognpdf, inflexion_points_logparam_robust_t0_fixed, snr
+
 
 def prepare_ocp(
     biorbd_model_path: str,
@@ -12,6 +14,8 @@ def prepare_ocp(
     cost_marker: bool = True,
     min_jerk: bool = True,
     min_energy: bool = True,
+    alpha_beta: float = 5000,
+    t0:float = 0,
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
     use_sx: bool = False,
     assume_phase_dynamics: bool = False,
@@ -37,8 +41,9 @@ def prepare_ocp(
                 marker="wrist",
                 custom_type=ObjectiveFcn.Mayer,
                 node=i,
+                command_delay=t0,
                 quadratic=False,
-                weight=1e5,
+                weight=alpha_beta,
                 expand=True,
             )
 
@@ -49,6 +54,7 @@ def prepare_ocp(
                 marker="wrist",
                 nodes_phase=[0, 0],
                 nodes=[i, i + 1],
+                command_delay=t0,
                 weight=1,
                 quadratic=False,
                 expand=True,
@@ -73,6 +79,7 @@ def prepare_ocp(
                 marker="wrist",
                 nodes_phase=[0, 0],
                 nodes=[i, i + 1],
+                command_delay=t0,
                 weight=1,
                 quadratic=False,
                 expand=True,
@@ -98,7 +105,6 @@ def prepare_ocp(
                 quadratic=False,
                 expand=True,
             )
-
     elif cost_dt2 and not cost_marker:
         for i in range(n_shooting):
             # angular_velocity * t
@@ -148,14 +154,14 @@ def prepare_ocp(
     x_bounds["q"][0, -1] = -70 * d2r
     x_bounds["q"][1, -1] = 10 * d2r
 
-    x_bounds["qdot"] = [-50, -50], [50, 50]
-    x_bounds["qddot"] = [-2000, -2000], [2000, 2000]
+    x_bounds["qdot"] = [-600 * d2r, -600 * d2r], [600 * d2r, 600 * d2r]  # [-50, -50], [50, 50]
+    x_bounds["qddot"] = [-5000 * d2r, -5000 * d2r], [5000 * d2r, 5000 * d2r]  # [-2000, -2000], [2000, 2000]
 
     x_bounds["qdot"][:, [0, -1]] = 0.0  # qdot = 0 at start and end
     x_bounds["qddot"][:, [0, ]] = 0.0  # qDdot = 0 at start and end
 
     # Define control path constraint
-    jerk_min, jerk_max = -1e30, 1e30
+    jerk_min, jerk_max = -4000, 4000 #-1e30, 1e30
     u_bounds = BoundsList()
     u_bounds.add("qdddot", min_bound=[jerk_min] * bio_model.nb_tau, max_bound=[jerk_max] * bio_model.nb_tau)
 
@@ -182,7 +188,7 @@ def prepare_ocp(
     )
 
 
-def main():
+def main(n_shooting=120, final_time:float=0.3, alpha_beta:float=5000,  t0:float=0):
     """
     Runs the optimization and animates it
     """
@@ -190,8 +196,6 @@ def main():
     model_path = "arm.bioMod"
 
     # Problem parameters
-    n_shooting = 120
-    final_time = 0.3
     obj_dict = {'Minimize jerk':{'cost_dt2':False, 'cost_marker':True,
                                  'min_energy': False, 'min_jerk':True},
                 'Minimize jerk and time':{'cost_dt2':True, 'cost_marker':True,
@@ -208,18 +212,21 @@ def main():
                           min_energy=obj_dict[ifunc]['min_energy'],
                           min_jerk=obj_dict[ifunc]['min_jerk'],
                           n_shooting=n_shooting,
-                          final_time=final_time)
+                          final_time=final_time-t0,
+                          alpha_beta=alpha_beta,
+                          t0=t0)
 
         # --- Solve the program --- #
         sol = ocp.solve(Solver.IPOPT(show_online_optim=platform.system() == "Linux"))
         print(f'Solver for {ifunc} ended with {sol.status}')
-        plot_cost(sol, n_shooting, f'bio_v1_costs_{ifunc}.png')
+        # plot_cost(sol, n_shooting, f'bio_v1_costs_{ifunc}.png')
         q = sol.states["q"]
         qd = sol.states["qdot"]
         qdd = sol.states["qddot"]
         jerk = sol.controls['qdddot']
 
-        t = np.linspace(0, final_time, q.shape[1])
+        t = np.linspace(0, final_time-t0, q.shape[1])
+        t = t + t0
 
         data_obj = pd.DataFrame({'Time': t,
                                  'q1': np.rad2deg(sol.states["q"][0]),
@@ -228,33 +235,39 @@ def main():
                                  'dq2': sol.states["qdot"][1],
                                  'ddq1': sol.states["qddot"][0],
                                  'ddq2': sol.states["qddot"][1]
-                                 }).assign(cost=ifunc)
+                                 })
+        data_obj.loc[-2] = [0, 30, 60, 0, 0, 0,0]  # adding a row for 0
+        data_obj.loc[-1] = [t0 / 2, 30, 60, 0, 0,0,0 ]
+        data_obj.index = data_obj.index + 2  # shifting index
+        data_obj = data_obj.sort_index()
+        data_obj = data_obj.assign(cost=ifunc)
         all_sol.append(data_obj)
 
         # biorbd_viz = bioviz.Viz(model_path)
         # biorbd_viz.load_movement(q)
         # biorbd_viz.exec()
 
-        plot_kinematics(t, q, qd, qdd, jerk, f'v1_overview_{ifunc}.svg')
+        # plot_kinematics(t, q, qd, qdd, jerk, f'v1_overview_{ifunc}.svg')
 
     data = pd.concat(all_sol)
     var_list = ['Angular position [°]', 'Angular Velocity [rad/s]']
-    plot_q_qdot_prx_dist(data, var_list, 'bio_v1_q_dq.svg' )
+    # plot_q_qdot_prx_dist(data.drop(['ddq1', 'ddq2'], axis=1), var_list, 'Q2DOFef_v1_q_dq.svg' )
+    # plot_interarticular(data, ['q1 [°]', 'q2 [°]'], 'Q2DOFef_v1_q1_q2.svg' )
 
     model = biorbd.Model(model_path)
     marker_idx = 1  # model.marker_index("wrist")
 
-    marker_position = pd.DataFrame(data=np.zeros((q.shape[1]*3, 12)),
+    marker_position = pd.DataFrame(data=np.zeros((all_sol[0].shape[0]*3, 12)),
                                    columns=['Time', 'Elbow_x', 'Elbow_y', 'Wrist_x', 'Wrist_y',
                                             'Wrist_x_vel', 'Wrist_y_vel',
                                             'Elbow_vel', 'Wrist_vel',
                                             'Elbow_acc',  'Wrist_acc',
                                             'cost'])
-    marker_position.Time = np.hstack((t,t,t))
+    marker_position.Time = np.hstack((all_sol[0].Time.values,all_sol[0].Time.values,all_sol[0].Time.values))
 
     for i, irow in marker_position.iterrows():
-        i_obj = i//q.shape[1]
-        i_frame = i%q.shape[1]
+        i_obj = i//all_sol[0].shape[0]
+        i_frame = i%all_sol[0].shape[0]
         pos = np.hstack([
             model.marker(
                 np.deg2rad(all_sol[i_obj][['q1', 'q2']].values.T)[:, i_frame], j
@@ -289,12 +302,35 @@ def main():
                                             marker_ddot,  # ['Elbow_acc', # 'Wrist_acc']
                                             [i_obj] # cost
                                             ))
-    marker_position.cost = np.repeat(list(obj_dict.keys()), q.shape[1])
+    marker_position.cost = np.repeat(list(obj_dict.keys()), all_sol[0].shape[0])
 
-    plot_effector_velocity(marker_position, 'bio_v1_effectors_vel.svg')
+    # Evaluate SNR:
+    for icost in ['Minimize jerk',
+                  'Minimize jerk and time',
+                  'Minimize jerk, energy and time']:
+        data_for_snr = marker_position[['Time', 'Wrist_vel', 'cost']]
+        data_for_snr = data_for_snr[data_for_snr.cost == icost]
+        param_log_snr = inflexion_points_logparam_robust_t0_fixed(data_for_snr.Time.values, data_for_snr.Wrist_vel.values,
+                                                                  np.gradient(data_for_snr.Wrist_vel.values, data_for_snr.Time.values),
+                                                                  [0.1, 0.6, 0.1],
+                                                                  t0=t0-t0)
+        log_for_cost = param_log_snr[2][0] * lognpdf(data_for_snr.Time.values, param_log_snr[0][0], param_log_snr[1][0],
+                                                     t0=param_log_snr[3][0])
+        snr_value = snr(data_for_snr.Wrist_vel.values, log_for_cost)
+        print(f'For {icost}, SNR = {snr_value}')
+        log_output = f'The lognormal is defined with D:{np.round(param_log_snr[2][0], 2)}, mu:' \
+                     f'{np.round(param_log_snr[0][0], 2)},sigma' \
+                     f':{np.round(param_log_snr[1][0], 2)} and t0: {np.round(param_log_snr[3][0], 3)}'
+        print(log_output)
+
+
+    # plot_effector_velocity(marker_position, 'Q2DOFef_v1_effectors_vel.svg')
     plot_arm_in_time(marker_position,
                      ['Minimize jerk', 'Minimize jerk and time', 'Minimize jerk, energy and time', ],
-                     'bio_v1_arm.svg')
+                     'Q2DOFef_v1_arm.svg')
 
 if __name__ == "__main__":
-    main()
+    main(n_shooting=200,
+         final_time=0.8,
+         alpha_beta=1e5,
+         t0=0.01)

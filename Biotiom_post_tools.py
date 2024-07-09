@@ -37,6 +37,16 @@ def plot_kinematics(t, q, qd, qdd, jerk, name):
     plt.savefig(name)
     plt.close()
 
+def plot_interarticular(data, var_list, name):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    g = sns.lineplot(data=data, x='q2', y='q1', hue='cost', sort=False, ax=ax)
+    g.set_ylabel(var_list[0])
+    g.set_xlabel(var_list[1])
+    plt.legend(frameon=False)
+    g.axes.set_aspect('equal', adjustable='box')
+    plt.savefig(name)
+    plt.close()
+
 def plot_q_qdot_prx_dist(data, var_list, name):
     final_time = data.Time.max()
     df = data.melt(['Time', 'cost'])
@@ -132,7 +142,7 @@ def plot_arm_in_time(marker_position, col_order, name):
         ])
 
 
-    g3 = sns.relplot(data=data_smooth, x='x', y='y', style='Joint', height=3, aspect=1, markers=['4', '4'],
+    g3 = sns.relplot(data=data_smooth, x='x', y='y', style='Joint', height=3, aspect=1.0, markers=['4', '4'],
                      col='cost',
                      color='grey', alpha=0.5,
                      col_order=col_order,
@@ -143,38 +153,134 @@ def plot_arm_in_time(marker_position, col_order, name):
     except:
         data = marker_position[['Time', 'Elbow_x', 'Elbow_y', 'cost']]
         elbow_Only = True
-    data.Time = data.Time.round(3)
-    data = data.loc[
-        (data.Time == 0) |
-        (data.Time == 0.1) |
-        (data.Time == 0.2) |
-        (data.Time == final_time)]
+    s_data = pd.DataFrame(columns=data.columns, data=np.zeros((5*3, len(data.columns))))
+    time_of_interest = [0, 0.2, 0.4, 0.6, final_time]
+    s_data.Time = time_of_interest*3
+    for i, icost in enumerate(set(data.cost)):
+        interpolation_base = data[data.cost == icost]
+        s_data.cost[i*len(time_of_interest):(i+1)*len(time_of_interest)] = [icost]*len(time_of_interest)
+        for column in interpolation_base.columns[1:-1]:
+            s_data[column][i*len(time_of_interest):(i+1)*len(time_of_interest)]= np.interp(time_of_interest, interpolation_base.Time.values, interpolation_base[[column]].values.flatten())
+    # data.Time = data.Time.round(3)
+    # data = data.loc[
+    #     (data.Time == 0) |
+    #     (data.Time == 0.2) |
+    #     (data.Time == 0.4) |
+    #     (data.Time == 0.6) |
+    #     (data.Time == final_time)]
 
     colors_cost = ['#1f77b4', '#ff7f0e', '#2ca02c',]
-    alphas = np.linspace(4, 10, 4)/10
+    colors_palette_cost = [sns.color_palette(palette='ocean')[1:], #GnBu
+                           sns.color_palette(palette='gist_heat')[1:],
+                           sns.color_palette(palette='viridis')[1:]]
+    alphas = np.linspace(3, 10, 5)/10
     for i, iax in enumerate(g3.axes.flatten()):
         icost = col_order[i]
-        for iirow, irow in data[data.cost==icost].iterrows():
+        for iirow, irow in s_data[s_data.cost==icost].iterrows():
             if not elbow_Only:
                 iax.plot([0, irow.Elbow_x, irow.Wrist_x], [0, irow.Elbow_y, irow.Wrist_y],
-                     color=colors_cost[i],
-                     alpha=alphas[int((iirow-121*i)/40)])
+                         color = colors_palette_cost[i][iirow%len(time_of_interest)],
+                     # color=colors_cost[i],
+                     # alpha=alphas[iirow%len(time_of_interest)]
+                         label= irow.Time)#alphas[int((iirow-121*i)/40)])
             else:
                 iax.plot([0, irow.Elbow_x], [0, irow.Elbow_y],
-                         color=colors_cost[i],
-                         alpha=alphas[int((iirow - 121 * i) / 40)])
+                         color=colors_palette_cost[i][iirow % len(time_of_interest)]
+                         # color=colors_cost[i],
+                         # alpha=alphas[iirow%len(time_of_interest)]
+                         )#alphas[int((iirow-121*i)/40)])
+
         iax.set_title('')
         iax.set_xlabel('')
         iax.set_ylabel('')
-        iax.set_xlim(-0.1, 0.8)
+        iax.set_xlim(-0.1, 0.6)
         iax.set_ylim(-0.6, 0.6)
         iax.set_aspect('equal')
         iax.tick_params(axis='x', which='both', bottom=False, labelbottom=False)
         iax.tick_params(axis='y', which='both', left=False, labelleft=False)
         iax.spines[['right', 'top']].set_visible(True)
+        labelLines(iax.get_lines(), align=False, fontsize=10)
+        plt.tight_layout()
 
     plt.savefig(name)
     plt.close()
+
+from math import atan2,degrees
+
+# from https://stackoverflow.com/questions/16992038/how-to-place-inline-labels-in-a-line-plot
+#Label line with line2D label data
+def labelLine(line,x,label=None,align=True,**kwargs):
+
+    ax = line.axes
+    xdata = line.get_xdata()
+    ydata = line.get_ydata()
+    x = xdata[1]*2/3
+
+    if (x < xdata[0]) or (x > xdata[-1]):
+        print('x label location is outside data range!')
+
+    #Plot on the first segment
+    ip = 1
+
+    # y = ydata[ip-1] + (ydata[ip]-ydata[ip-1])*(x-xdata[ip-1])/(xdata[ip]-xdata[ip-1])
+    y = ydata[1]*2/3
+
+    if not label:
+        label = line.get_label()
+
+    if align:
+        #Compute the slope
+        dx = xdata[ip] - xdata[ip-1]
+        dy = ydata[ip] - ydata[ip-1]
+        ang = degrees(atan2(dy,dx))
+
+        #Transform to screen co-ordinates
+        pt = np.array([x,y]).reshape((1,2))
+        trans_angle = ax.transData.transform_angles(np.array((ang,)),pt)[0]
+
+    else:
+        trans_angle = 0
+
+    #Set a bunch of keyword arguments
+    if 'color' not in kwargs:
+        kwargs['color'] = line.get_color()
+
+    if ('horizontalalignment' not in kwargs) and ('ha' not in kwargs):
+        kwargs['ha'] = 'center'
+
+    if ('verticalalignment' not in kwargs) and ('va' not in kwargs):
+        kwargs['va'] = 'center'
+
+    if 'backgroundcolor' not in kwargs:
+        kwargs['backgroundcolor'] = ax.get_facecolor()
+
+    if 'clip_on' not in kwargs:
+        kwargs['clip_on'] = True
+
+    if 'zorder' not in kwargs:
+        kwargs['zorder'] = 2.5
+
+    ax.text(x,y,label,rotation=trans_angle,**kwargs)
+
+def labelLines(lines,align=True,xvals=None,**kwargs):
+
+    ax = lines[0].axes
+    labLines = []
+    labels = []
+
+    #Take only the lines which have labels other than the default ones
+    for line in lines:
+        label = line.get_label()
+        if "_line" not in label:
+            labLines.append(line)
+            labels.append(label)
+
+    if xvals is None:
+        xmin,xmax = ax.get_xlim()
+        xvals = np.linspace(xmin,xmax,len(labLines)+2)[1:-1]
+
+    for line,x,label in zip(labLines,xvals,labels):
+        labelLine(line,x,label,align,**kwargs)
 
 def plot_cost(sol, n_shooting, name):
     if type(n_shooting) is list:

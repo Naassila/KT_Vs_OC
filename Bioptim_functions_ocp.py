@@ -22,7 +22,7 @@ from bioptim import (
     Node,
 )
 
-def min_marker_velocity_dt2(controller: PenaltyController, marker: str) -> MX:
+def min_marker_velocity_dt2(controller: PenaltyController, marker: str, command_delay: float = 0) -> MX:
     """
     This function mimics the ObjectiveFcn.MINIMIZE_MARKERSVELOCITY x t^2
     """
@@ -30,7 +30,8 @@ def min_marker_velocity_dt2(controller: PenaltyController, marker: str) -> MX:
     model = controller.model
     marker_idx = model.marker_index(marker)
 
-    t_node = controller.get_nlp.node_time(controller.node_index) + dt / 2  # to avoid infinity at first node
+    t_node = controller.get_nlp.node_time(controller.node_index) + dt / 2 # to avoid infinity at first node
+    t_node = t_node + command_delay
     state = controller.states
     marker_dot = model.marker_velocities(state["q"].cx, state["qdot"].cx)[marker_idx]
     # marker_dot += model.marker_velocities(state["q"].cx_end, state["qdot"].cx_end)[marker_idx]
@@ -41,33 +42,43 @@ def min_marker_velocity_dt2(controller: PenaltyController, marker: str) -> MX:
     return out
 
 
-def min_qdot_dt2(controller: PenaltyController) -> MX:
+def min_qdot_dt2(controller: PenaltyController, command_delay: float = 0) -> MX:
     """
     This function mimics the ObjectiveFcn.MINIMIZE_STATES x t^2
     """
     dt = controller.tf / controller.ns
     t_node = controller.get_nlp.node_time(controller.node_index) + dt / 2  # to avoid infinity at first node
+    t_node = t_node + command_delay
     qdot = controller.states["qdot"].cx
 
-    out = sum1(qdot**2) * t_node**2 * dt
+    # Original
+    # dt = controller.tf / controller.ns
+    # t_node = controller.get_nlp.node_time(controller.node_index) + dt / 2  # to avoid infinity at first node
+    # qdot = controller.states["qdot"].cx
+
+    # out = sum1(qdot**2) * (t_node-controller.tf/4)**2 * dt
+    out = sum1(qdot**2) * (t_node)**2 * dt
+
 
     return out
 
 
-def min_jerk_dt2(controller: PenaltyController) -> MX:
+def min_jerk_dt2(controller: PenaltyController, command_delay: float = 0) -> MX:
     """
     This function mimics the ObjectiveFcn.MINIMIZE_CONTROL * t^2
     """
     dt = controller.tf / controller.ns
     t_node = controller.get_nlp.node_time(controller.node_index) + dt / 2  # to avoid infinity at first node
+    t_node = t_node + command_delay
     jerk = controller.controls["qdddot"].cx
 
-    out = sum1(jerk**2) * t_node**2 * dt
+    # out = sum1(jerk**2) * (t_node-controller.tf/4)**2 * dt
+    out = sum1(jerk ** 2) * (t_node) ** 2 * dt
 
     return out
 
 
-def multinode_min_marker_jerk_dt2(controllers: list[PenaltyController], marker: str) -> MX:
+def multinode_min_marker_jerk_dt2(controllers: list[PenaltyController], marker: str, command_delay: float = 0) -> MX:
     """
     This function mimics the ObjectiveFcn.MINIMIZE_MARKERSVELOCITY with a multinode objective.
     """
@@ -90,6 +101,7 @@ def multinode_min_marker_jerk_dt2(controllers: list[PenaltyController], marker: 
     )[marker_idx]
     marker_jerk = (marker_acc_j - marker_acc_i) / dt
     t_node = controllers[0].get_nlp.node_time(controllers[0].node_index) + dt / 2  # to avoid infinity at first node
+    t_node = t_node + command_delay
 
     return sum1(marker_jerk**2) * t_node**2 * dt  # todo: valider l'expression
 

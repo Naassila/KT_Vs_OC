@@ -3,14 +3,15 @@ import numpy as np
 from scipy.interpolate import interp1d
 from scipy.optimize import fsolve, least_squares
 from scipy.linalg import block_diag
-from qpsolvers import solve_qp
-from qpsolvers.problem import Problem
-from qpsolvers.solve_problem import solve_problem
+# from qpsolvers import solve_qp
+# from qpsolvers.problem import Problem
+# from qpsolvers.solve_problem import solve_problem
 # from casadi import *
 
 def lognpdf(x, mu, sigma, t0):
-    # x = np.where(x <= 0, np.inf, x )
-    y = np.exp(-0.5*((np.log(x-t0) - mu)/sigma)**2) / ((x-t0) * np.sqrt(2*np.pi) * sigma)
+    xt0 = x-t0
+    xt0 = np.where(xt0 <= 0, np.inf, xt0 )
+    y = np.exp(-0.5*((np.log(xt0) - mu)/sigma)**2) / ((xt0) * np.sqrt(2*np.pi) * sigma)
     return y
 
 def func(x, dti, dtj, ai, aj):
@@ -19,6 +20,12 @@ def func(x, dti, dtj, ai, aj):
 
 def func_sigma(x, tm, tmin, tmax):
     a = (tmax-tmin)*(np.exp(-x**2)-np.exp(-3*x))/(2*np.sinh(3*x)) - (tm-tmin)
+    return a
+
+def func_sigma_t0(x, t0, tm, tinf2, tinf1):
+    alpha1 = np.exp(-x * (x + np.sqrt(x ** 2 + 4)) / 2)
+    alpha2 = np.exp(-x * (x - np.sqrt(x ** 2 + 4)) / 2)
+    a = (tinf2-tinf1)/(tm-t0)-(alpha2-alpha1)
     return a
 
 def home_fit_lognpdf(t , f, ti, tj, u_bounds, s_bounds):
@@ -122,9 +129,9 @@ def inflexion_points_logparam_robust(t, f, df, s_bounds, plot_check=False):
     tmax = t[onsets[1]]
     iv_max = ab_v.argmax()
     t_m = t[iv_max]
-    i1 = df.argmax()
+    i1 = np.nanargmax(df)
     tinf1 = t[i1]
-    i2 = df.argmin()
+    i2 = np.nanargmin(df)
     tinf2 = t[i2]
     v_0 = ab_v.max()*1/100 # 1% max velocity to identify start and end of lognormal
     # vmin = (ab_v-v_0).argmin()
@@ -157,7 +164,62 @@ def inflexion_points_logparam_robust(t, f, df, s_bounds, plot_check=False):
     t0 = t_m-np.exp(mu-sigma**2)
     D = ab_v.max()*sigma*np.sqrt(2*np.pi)*np.exp(mu-0.5*sigma**2)
 
-    return mu, sigma, D, t0
+    return mu, sigma, D, t0, [t_m,tinf1,tinf2,tmin,tmax]
+
+def inflexion_points_logparam_robust_t0_fixed(t, f, df, s_bounds, t0=0, plot_check=False):
+    # based on https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=4668345
+    # Basically, we need to identify the following events:
+    # t_m: occurence of maximum velocity
+    # tinf1: occurence of maximum acceleration
+    # tinf2: occurence of minimum acceleration
+    # tmin: min bound of the interval
+    # tmax max bound of the interval
+    ab_v = np.abs(f)
+    df = df # was -df
+    onsets = detect_onset(ab_v, ab_v.max()*1/100)[0]
+    tmin = t[onsets[0]]
+    tmax = t[onsets[1]]
+    iv_max = ab_v.argmax()
+    t_m = t[iv_max]
+    i1 = np.nanargmax(df)
+    tinf1 = t[i1]
+    i2 = np.nanargmin(df)
+    tinf2 = t[i2]
+    v_0 = ab_v.max()*1/100 # 1% max velocity to identify start and end of lognormal
+    # vmin = (ab_v-v_0).argmin()
+    # sort_indices = np.argsort(ab_v - ab_v.max() * 1 / 100)
+    # imin_max = np.argsort(np.abs(np.diff(sort_indices)))[::-1][:2]
+    # if iv_max<imin_max[1] and iv_max>imin_max[0]:
+    #     tmax = imin_max[1]
+    #     tmin = imin_max[0]
+    # else:
+    #     ordered_indices = np.argsort(np.abs(np.diff(sort_indices)))[::-1]
+    #     tmin = t[ordered_indices[ordered_indices<iv_max][0]]
+    #     tmax = t[ordered_indices[ordered_indices>iv_max][0]]
+
+    if plot_check:
+        plt.plot(t, f, label='Velocity')
+        plt.plot(t, ab_v-v_0)
+        # plt.plot(t, df, label='Acceleration')
+        for it in [t_m, tmin, tmax, tinf1, tinf2]:
+            plt.axvline(x = it)
+
+    f = lambda x: func_sigma_t0(x, t0, t_m, tinf2, tinf1)
+    # f = lambda x: func_sigma(x, t_m, tinf2, tinf1)
+    res = least_squares(f, s_bounds[-1], bounds=(s_bounds[0], s_bounds[1]))
+    sigma = res.x
+
+    mu = sigma**2 + np.log(t_m-t0)
+    D = ab_v.max()*sigma*np.sqrt(2*np.pi)*np.exp(mu-0.5*sigma**2)
+
+    return mu, sigma, D, [t0], [t_m,tinf1,tinf2,tmin,tmax]
+
+def snr(v,ln):
+    error = ln-v
+    signal_pow = np.linalg.norm(ln.flatten()) ** 2
+    noise_pow = np.linalg.norm(error.flatten()) ** 2
+    r = 10 * np.log10(signal_pow / noise_pow)
+    return r
 class set_problem:
     def __init__(self, qLow ,qUpp, dqMax, tNode, qNode, nGrid):
         self.qLow = qLow
